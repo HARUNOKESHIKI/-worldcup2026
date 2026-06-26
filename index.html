@@ -6,18 +6,66 @@
 <title>W杯2026 全日程</title>
 <meta name="theme-color" content="#0b1020">
 <style>
-  html, body { margin:0; padding:0; height:100%; width:100%; overflow:hidden; background:#0b1020; }
-  iframe { border:0; width:100vw; height:100dvh; display:block; background:#0b1020; }
-  .fallback { position:fixed; inset:0; display:grid; place-items:center; color:#fff; font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#0b1020; padding:24px; text-align:center; }
-  .fallback a { color:#6ee7b7; font-weight:800; }
+html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#0b1020}iframe{border:0;width:100vw;height:100dvh;display:block;background:#0b1020}.toast{position:fixed;left:12px;right:12px;bottom:12px;z-index:999999;background:rgba(7,11,22,.92);color:#fff;border:1px solid rgba(110,231,183,.35);border-radius:14px;padding:10px 12px;font:700 13px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.3);display:none}.toast.show{display:block}
 </style>
 </head>
 <body>
-<iframe src="https://6a3c6df239b6dc45388acd9c--whimsical-choux-12f95f.netlify.app" title="W杯2026 全日程"></iframe>
-<noscript>
-  <div class="fallback">
-    <p>ページを表示できません。<br><a href="https://6a3c6df239b6dc45388acd9c--whimsical-choux-12f95f.netlify.app">前の完成版ページを開く</a></p>
-  </div>
-</noscript>
+<iframe id="wcframe" src="/old-page" title="W杯2026 全日程"></iframe>
+<div id="toast" class="toast">最新結果を反映しました</div>
+<script>
+(function(){
+  const frame=document.getElementById('wcframe');
+  const toast=document.getElementById('toast');
+  const alias={IRN:'IRI',HAI:'HTI'};
+  const norm=c=>alias[c]||c;
+  const key=(a,b)=>[norm(a),norm(b)].sort().join('-');
+  const esc=v=>String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+  function show(msg){toast.textContent=msg;toast.classList.add('show');clearTimeout(show.t);show.t=setTimeout(()=>toast.classList.remove('show'),2600)}
+  function scoreFor(scores,code){code=norm(code);return scores?.[code]??scores?.[Object.keys(alias).find(k=>alias[k]===code)]}
+  function makeScorers(list,score){
+    if(Array.isArray(list)&&list.length) return '<small>得点者</small> '+list.map(esc).join('<br>');
+    if(score==='0-0') return '<small>得点者</small> 得点者なし';
+    return '<small>得点者</small> 確認中';
+  }
+  function apply(data){
+    const doc=frame.contentDocument; if(!doc) return 0;
+    const events={};
+    (data.events||[]).forEach(e=>{
+      const cs=e.competitors||[]; if(cs.length<2) return;
+      events[key(cs[0].abbr,cs[1].abbr)]=e;
+    });
+    let changed=0;
+    doc.querySelectorAll('tbody#rows tr[data-team-a][data-team-b]').forEach(row=>{
+      const a=norm(row.dataset.teamA), b=norm(row.dataset.teamB);
+      const e=events[key(a,b)]; if(!e) return;
+      const sa=scoreFor(e.scores,a), sb=scoreFor(e.scores,b);
+      if(sa==null||sb==null||(!e.completed&&!e.inProgress)) return;
+      const score=sa+'-'+sb;
+      const cell=row.querySelector('td.result-cell'); if(!cell) return;
+      const old=row.querySelector('.result-text')?.textContent?.trim();
+      if(old===score && row.querySelector('.scorers')) return;
+      const id='auto-'+(row.dataset.gameId||Math.random().toString(36).slice(2));
+      cell.innerHTML='<input class="result-toggle" id="'+id+'" type="checkbox"><label class="show-one" for="'+id+'"><span class="label-show">結果を見る</span><span class="label-hide">隠す</span></label><span class="result-text">'+esc(score)+'</span><span class="scorers">'+makeScorers(e.scorers,score)+'</span>';
+      const st=row.querySelector('td.status'); if(st) st.textContent=e.completed?'終了':'試合中';
+      row.dataset.search=(row.dataset.search||'')+' '+score+' '+(e.completed?'終了':'試合中')+' '+(e.scorers||[]).join(' ');
+      changed++;
+    });
+    const w=frame.contentWindow;
+    ['renderGroupOverview','filterRows','updateVisibleCount','renderCompact'].forEach(fn=>{try{if(typeof w[fn]==='function')w[fn]()}catch(e){}});
+    return changed;
+  }
+  async function refresh(){
+    try{
+      const res=await fetch('/api/worldcup-scores?ts='+Date.now(),{cache:'no-store'});
+      const data=await res.json();
+      const n=apply(data);
+      if(n) show('最新結果を'+n+'件反映しました');
+    }catch(e){console.warn('score refresh failed',e)}
+  }
+  frame.addEventListener('load',()=>setTimeout(refresh,800));
+  setInterval(refresh,60000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+})();
+</script>
 </body>
 </html>
