@@ -27,31 +27,79 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
     if(score==='0-0') return '<small>得点者</small> 得点者なし';
     return '<small>得点者</small> 確認中';
   }
+  function ensurePatchStyle(doc){
+    if(doc.getElementById('auto-result-patch-style')) return;
+    const st=doc.createElement('style');
+    st.id='auto-result-patch-style';
+    st.textContent='.auto-result-inline{display:inline-flex;align-items:center;gap:6px;margin-left:8px;font-weight:900;color:#fff}.auto-result-inline .scorers{display:block;font-size:11px;color:#dbeafe;line-height:1.35;white-space:normal}.auto-patched{animation:autoPatchFlash 1.7s ease}@keyframes autoPatchFlash{0%{background:rgba(110,231,183,.22)}100%{background:transparent}}';
+    doc.head.appendChild(st);
+  }
+  function findSmallestContainer(doc,matchLabel){
+    if(!matchLabel) return null;
+    const els=[...doc.querySelectorAll('article,li,div,tr,section')].filter(el=>{
+      const txt=el.textContent||'';
+      return txt.includes(matchLabel) && txt.length<1200;
+    });
+    if(!els.length) return null;
+    els.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length);
+    return els[0];
+  }
+  function patchLooseCompact(doc,matchLabel,score,scorerHtml,statusText){
+    const box=findSmallestContainer(doc,matchLabel);
+    if(!box) return false;
+    let target=box.querySelector('.result-text');
+    if(target){
+      if(target.textContent.trim()!==score) target.textContent=score;
+      let sc=box.querySelector('.scorers');
+      if(sc) sc.innerHTML=scorerHtml; else target.insertAdjacentHTML('afterend','<span class="scorers">'+scorerHtml+'</span>');
+      box.classList.add('auto-patched');
+      return true;
+    }
+    const buttons=[...box.querySelectorAll('button,label,a,span')].filter(el=>(el.textContent||'').includes('結果を見る'));
+    const insertTarget=buttons[0]||box;
+    const id='compact-auto-'+Math.random().toString(36).slice(2);
+    const html='<span class="auto-result-inline"><button class="show-one" type="button" data-auto-result-toggle="'+id+'">結果を見る</button><span class="result-text" data-auto-result="'+id+'">'+esc(score)+'</span><span class="scorers">'+scorerHtml+'</span></span>';
+    if(insertTarget===box) box.insertAdjacentHTML('beforeend',html); else insertTarget.insertAdjacentHTML('afterend',html);
+    if(statusText && !box.textContent.includes(statusText)) box.dataset.autoStatus=statusText;
+    box.classList.add('auto-patched');
+    return true;
+  }
   function apply(data){
     const doc=frame.contentDocument; if(!doc) return 0;
+    ensurePatchStyle(doc);
     const events={};
     (data.events||[]).forEach(e=>{
       const cs=e.competitors||[]; if(cs.length<2) return;
       events[key(cs[0].abbr,cs[1].abbr)]=e;
     });
     let changed=0;
+    const updated=[];
     doc.querySelectorAll('tbody#rows tr[data-team-a][data-team-b]').forEach(row=>{
       const a=norm(row.dataset.teamA), b=norm(row.dataset.teamB);
       const e=events[key(a,b)]; if(!e) return;
       const sa=scoreFor(e.scores,a), sb=scoreFor(e.scores,b);
       if(sa==null||sb==null||(!e.completed&&!e.inProgress)) return;
       const score=sa+'-'+sb;
+      const scorerHtml=makeScorers(e.scorers,score);
+      const statusText=e.completed?'終了':'試合中';
       const cell=row.querySelector('td.result-cell'); if(!cell) return;
       const old=row.querySelector('.result-text')?.textContent?.trim();
-      if(old===score && row.querySelector('.scorers')) return;
-      const id='auto-'+(row.dataset.gameId||Math.random().toString(36).slice(2));
-      cell.innerHTML='<input class="result-toggle" id="'+id+'" type="checkbox"><label class="show-one" for="'+id+'"><span class="label-show">結果を見る</span><span class="label-hide">隠す</span></label><span class="result-text">'+esc(score)+'</span><span class="scorers">'+makeScorers(e.scorers,score)+'</span>';
-      const st=row.querySelector('td.status'); if(st) st.textContent=e.completed?'終了':'試合中';
-      row.dataset.search=(row.dataset.search||'')+' '+score+' '+(e.completed?'終了':'試合中')+' '+(e.scorers||[]).join(' ');
-      changed++;
+      const matchLabel=row.querySelector('.match-link')?.getAttribute('data-match') || row.querySelector('.match-main')?.textContent?.replace(/\s+/g,' ').trim() || '';
+      if(old!==score || !row.querySelector('.scorers')){
+        const id='auto-'+(row.dataset.gameId||Math.random().toString(36).slice(2));
+        cell.innerHTML='<input class="result-toggle" id="'+id+'" type="checkbox"><label class="show-one" for="'+id+'"><span class="label-show">結果を見る</span><span class="label-hide">隠す</span></label><span class="result-text">'+esc(score)+'</span><span class="scorers">'+scorerHtml+'</span>';
+        const st=row.querySelector('td.status'); if(st) st.textContent=statusText;
+        row.dataset.search=(row.dataset.search||'')+' '+score+' '+statusText+' '+(e.scorers||[]).join(' ');
+        row.classList.add('auto-patched');
+        changed++;
+      }
+      updated.push({matchLabel,score,scorerHtml,statusText});
     });
     const w=frame.contentWindow;
     ['renderGroupOverview','filterRows','updateVisibleCount','renderCompact'].forEach(fn=>{try{if(typeof w[fn]==='function')w[fn]()}catch(e){}});
+    // Compact view is generated separately in the old page, so patch it after any re-render too.
+    setTimeout(()=>{updated.forEach(u=>patchLooseCompact(doc,u.matchLabel,u.score,u.scorerHtml,u.statusText));},80);
+    setTimeout(()=>{updated.forEach(u=>patchLooseCompact(doc,u.matchLabel,u.score,u.scorerHtml,u.statusText));},600);
     return changed;
   }
   async function refresh(){
@@ -62,7 +110,7 @@ html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:#
       if(n) show('最新結果を'+n+'件反映しました');
     }catch(e){console.warn('score refresh failed',e)}
   }
-  frame.addEventListener('load',()=>setTimeout(refresh,800));
+  frame.addEventListener('load',()=>setTimeout(refresh,1000));
   setInterval(refresh,60000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 })();
